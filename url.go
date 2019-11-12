@@ -56,52 +56,52 @@ func fetch(urlTarget, _ string) ([]byte, error) {
 // Parse an URL.
 // The URL can be surrounded by a ``url()`` string. If ``base`` is not `None`,
 // the "folder" part of it is prepended to the URL.
-func parseUrl(rawurl, base string) *url.URL {
-	// if rawurl != "" {
-	//     match = URL.Find(rawurl)
-	//     if len(match) > 0 {
-	//         rawurl = match[1]
-	// 	}
-	// 	if base {
-	//         parsedBase = urlparse(base)
-	//         parsedUrl = urlparse(rawurl)
-	//         if parsedBase.scheme := range ("", "file") {
-	//             if parsedUrl.scheme := range ("", "file") {
-	//                 parsedBasePath = ntCompatiblePath(parsedBase.path)
-	//                 parsedUrlPath = ntCompatiblePath(parsedUrl.path)
-	//                 // We are sure that `rawurl` && `base` are both file-like URLs
-	//                 if os.path.isfile(parsedBasePath) {
-	//                     if parsedUrlPath {
-	//                         // Take the "folder" part of `base`, as
-	//                         // `os.path.join` doesn"t strip the file name
-	//                         rawurl = os.path.join(
-	//                             os.path.dirname(parsedBasePath),
-	//                             parsedUrlPath)
-	//                     } else {
-	//                         rawurl = parsedBasePath
-	//                     }
-	//                 } else if os.path.isdir(parsedBasePath) {
-	//                     if parsedUrlPath {
-	//                         rawurl = os.path.join(
-	//                             parsedBasePath, parsedUrlPath)
-	//                     } else {
-	//                         rawurl = ""
-	//                     }
-	//                 } else {
-	//                     rawurl = ""
-	//                 } if parsedUrl.fragment {
-	//                     rawurl = "{}#{}".format(rawurl, parsedUrl.fragment)
-	//                 }
-	//             }
-	//         } else if parsedUrl.scheme := range ("", parsedBase.scheme) {
-	//             // `urljoin` automatically uses the "folder" part of `base`
-	//             rawurl = urljoin(base, rawurl)
-	//         }
-	// 	}
-	// 	rawurl = normalizeUrl(rawurl.strip(`\""`))
-	// }
-	// return urlparse(rawurl || "")
-}
+// func parseUrl(rawurl, base string) *url.URL {
+// if rawurl != "" {
+//     match = URL.Find(rawurl)
+//     if len(match) > 0 {
+//         rawurl = match[1]
+// 	}
+// 	if base {
+//         parsedBase = urlparse(base)
+//         parsedUrl = urlparse(rawurl)
+//         if parsedBase.scheme := range ("", "file") {
+//             if parsedUrl.scheme := range ("", "file") {
+//                 parsedBasePath = ntCompatiblePath(parsedBase.path)
+//                 parsedUrlPath = ntCompatiblePath(parsedUrl.path)
+//                 // We are sure that `rawurl` && `base` are both file-like URLs
+//                 if os.path.isfile(parsedBasePath) {
+//                     if parsedUrlPath {
+//                         // Take the "folder" part of `base`, as
+//                         // `os.path.join` doesn"t strip the file name
+//                         rawurl = os.path.join(
+//                             os.path.dirname(parsedBasePath),
+//                             parsedUrlPath)
+//                     } else {
+//                         rawurl = parsedBasePath
+//                     }
+//                 } else if os.path.isdir(parsedBasePath) {
+//                     if parsedUrlPath {
+//                         rawurl = os.path.join(
+//                             parsedBasePath, parsedUrlPath)
+//                     } else {
+//                         rawurl = ""
+//                     }
+//                 } else {
+//                     rawurl = ""
+//                 } if parsedUrl.fragment {
+//                     rawurl = "{}#{}".format(rawurl, parsedUrl.fragment)
+//                 }
+//             }
+//         } else if parsedUrl.scheme := range ("", parsedBase.scheme) {
+//             // `urljoin` automatically uses the "folder" part of `base`
+//             rawurl = urljoin(base, rawurl)
+//         }
+// 	}
+// 	rawurl = normalizeUrl(rawurl.strip(`\""`))
+// }
+// return urlparse(rawurl || "")
+// }
 
 // Get bytes :in a parsed ``url`` using ``urlFetcher``.
 // If ``urlFetcher`` == nil  a default (no limitations) URLFetcher is used.

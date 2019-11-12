@@ -161,7 +161,7 @@ type UrlFectcher func(url, mimeType string) ([]byte, error)
 
 // Node is a SVG node.
 type Node struct {
-	element  *html.Node
+	element  *utils.HTMLNode
 	parent   *Node
 	children []*Node
 	root     bool
@@ -171,7 +171,7 @@ type Node struct {
 	tag        string
 	text       string
 	urlFetcher UrlFectcher
-	url        *url.URL
+	url        string
 
 	attributes map[string]string
 }
@@ -182,22 +182,25 @@ type styleMatchers struct {
 
 // Create the Node from ElementTree ``node``, with ``parent`` Node.
 // parent=None, parentChildren=false, url=None
-func NewNode(element *html.Node, style styleMatchers, urlFetcher UrlFectcher,
-	parent *Node, parentChildren bool, url *url.URL) *Node {
+func NewNode(element *utils.HTMLNode, style styleMatchers, urlFetcher UrlFectcher,
+	parent *Node, parentChildren bool, url string) *Node {
 	self := new(Node)
 
 	self.element = element
 	self.style = style
 
 	namespace, tag := slipTag(element.Data)
-	namespaceUrl := parent.namespaces[namespace]
+	var namespaceUrl string
+	if parent != nil {
+		namespaceUrl = parent.namespaces[namespace]
+	}
 	if namespace == "" || namespaceUrl == "" {
 		self.tag = tag
 	} else {
 		self.tag = fmt.Sprintf("{%s}%s", namespaceUrl, tag)
 	}
 
-	self.text = extractText(element)
+	self.text = element.GetText()
 	self.urlFetcher = urlFetcher
 
 	self.attributes = map[string]string{}
@@ -209,25 +212,25 @@ func NewNode(element *html.Node, style styleMatchers, urlFetcher UrlFectcher,
 				self.attributes[attribute] = parentValue
 			}
 		}
-		if url == nil {
+		if url == "" {
 			url = parent.url
 		}
 	}
 	self.url = url
 
 	// Apply CSS rules
-	styleAttr := getAttr(element, "style")
+	styleAttr := element.Get("style")
 	var normalAttr, importantAttr [][2]string
 	if styleAttr != "" {
-		normalAttr, importantAttr = parseDeclarations(styleAttr)
+		normalAttr, importantAttr = parseDeclarations2(styleAttr)
 	}
 	normalMatcher, importantMatcher := style.normal, style.important
 	var allDeclarationsLists [][][2]string
-	for _, rule := range normalMatcher.Match(element) {
+	for _, rule := range normalMatcher.Match(element.AsHtmlNode()) {
 		allDeclarationsLists = append(allDeclarationsLists, rule.payload)
 	}
 	allDeclarationsLists = append(allDeclarationsLists, normalAttr)
-	for _, rule := range importantMatcher.Match(element) {
+	for _, rule := range importantMatcher.Match(element.AsHtmlNode()) {
 		allDeclarationsLists = append(allDeclarationsLists, rule.payload)
 	}
 	allDeclarationsLists = append(allDeclarationsLists, importantAttr)
@@ -271,12 +274,12 @@ func NewNode(element *html.Node, style styleMatchers, urlFetcher UrlFectcher,
 	if parentChildren {
 		self.children = make([]*Node, len(parent.children))
 		for i, child := range parent.children {
-			self.children[i] = NewNode(child.element, style, self.urlFetcher, self, false, nil)
+			self.children[i] = NewNode(child.element, style, self.urlFetcher, self, false, "")
 		}
 	} else if len(self.children) == 0 {
-		for _, child := range nodeChildren(element, true) {
-			if matchFeatures(child) {
-				self.children = append(self.children, NewNode(child, style, self.urlFetcher, self, false, nil))
+		for _, child := range element.NodeChildren(true) {
+			if matchFeatures(child.AsHtmlNode()) {
+				self.children = append(self.children, NewNode(child, style, self.urlFetcher, self, false, ""))
 				if self.tag == "switch" {
 					break
 				}
@@ -291,11 +294,11 @@ func (self Node) fetchUrl(u *url.URL, resourceType string) ([]byte, error) {
 }
 
 // Create children and return them. textRoot=false
-func (self *Node) textChildren(element *html.Node, trailingSpace, textRoot bool) ([]*Node, bool) {
+func (self *Node) textChildren(element *utils.HTMLNode, trailingSpace, textRoot bool) ([]*Node, bool) {
 	var children []*Node
 	space := "{http://www.w3.org/XML/1998/namespace}space"
 	preserve := self.attributes[space] == "preserve"
-	self.text = handleWhiteSpaces(extractText(element), preserve)
+	self.text = handleWhiteSpaces(element.GetText(), preserve)
 	if trailingSpace && !preserve {
 		self.text = strings.TrimLeft(self.text, " ")
 	}
@@ -307,40 +310,40 @@ func (self *Node) textChildren(element *html.Node, trailingSpace, textRoot bool)
 	if self.text != "" {
 		trailingSpace = strings.HasSuffix(self.text, " ")
 	}
-	for _, child := range nodeChildren(element, true) {
+	for _, child := range element.NodeChildren(true) {
 		if child.Type == html.TextNode {
 			continue
 		}
 		var childNode *Node
 		if child.Data == "http://www.w3.org/2000/svg:tref" || child.Data == "tref" {
-			href := getAttr(child, "{http://www.w3.org/1999/xlink}href")
+			href := child.Get("{http://www.w3.org/1999/xlink}href")
 			if href == "" {
-				href = getAttr(child, "href")
+				href = child.Get("href")
 			}
 			u, err := url.Parse(href)
 			if err != nil {
 				log.Printf("invalid url %s", href)
+				u = &url.URL{}
 			}
-			childNode = NewNode(child, self.style, self.urlFetcher,
-				self, true, u)
+			childNode = NewNode(child, self.style, self.urlFetcher, self, true, u.String())
 			childNode.tag = "tspan"
 			// Retrieve the referenced node and get its flattened text
 			// and remove the node children.
 			childNode.text = flatten(child)
 		} else {
-			childNode = NewNode(child, self.style, self.urlFetcher, self, false, nil)
+			childNode = NewNode(child, self.style, self.urlFetcher, self, false, "")
 		}
 		childPreserve := childNode.attributes[space] == "preserve"
-		childNode.text = handleWhiteSpaces(extractText(child), childPreserve)
+		childNode.text = handleWhiteSpaces(child.GetText(), childPreserve)
 		childNode.children, _ = childNode.textChildren(child, trailingSpace, false)
 		trailingSpace = strings.HasSuffix(childNode.text, " ")
 		if _, in := childNode.attributes["rotate"]; len(originalRotate) != 0 && !in {
 			popRotation(childNode, originalRotate, rotate)
 		}
 		children = append(children, childNode)
-		if tail := extractTail(child); tail != "" {
-			anonymousEtree := html.Node{Type: html.ElementNode, Data: "{http://www.w3.org/2000/svg}tspan"}
-			anonymous := NewNode(&anonymousEtree, self.style, self.urlFetcher, self, false, nil)
+		if tail := child.GetTail(); tail != "" {
+			anonymousEtree := utils.HTMLNode{Type: html.ElementNode, Data: "{http://www.w3.org/2000/svg}tspan"}
+			anonymous := NewNode(&anonymousEtree, self.style, self.urlFetcher, self, false, "")
 			anonymous.text = handleWhiteSpaces(tail, preserve)
 			if len(originalRotate) != 0 {
 				popRotation(anonymous, originalRotate, rotate)
@@ -377,18 +380,20 @@ func extractSVG(root *html.Node) *html.Node {
 	return svgNode
 }
 
-func Parse(input io.Reader, urlFetcher UrlFectcher, url string) *Node {
+func Parse(input io.Reader, urlFetcher UrlFectcher, url string) (*Node, error) {
 
 	if urlFetcher == nil {
 		urlFetcher = fetch
 	}
 
 	_rootNode, err := html.Parse(input)
+	if err != nil {
+		return nil, err
+	}
+	root := (*utils.HTMLNode)(extractSVG(_rootNode))
 
-	root := extractSVG(_rootNode)
-
-	style := parseStylesheets(self, url)
-	self := NewNode(root, style, urlFetcher, parent, parentChildren, url)
+	style := parseStylesheets(root, urlFetcher, url)
+	self := NewNode(root, style, urlFetcher, nil, false, url)
 	self.root = true
-	return self
+	return self, nil
 }

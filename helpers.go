@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"golang.org/x/net/html"
+	"github.com/benoitkugler/go-weasyprint/utils"
 )
 
 // Surface helpers.
@@ -73,9 +73,9 @@ var (
 // }
 
 var (
-	re1 = regexp.MustCompile("(?<!e)-")
+	re1 = regexp.MustCompile("[^e]-")
 	re2 = regexp.MustCompile("[ \n\r\t,]+")
-	re3 = regexp.MustCompile(`(\.[0-9-]+)(?=\.)`)
+	re3 = regexp.MustCompile(`(\.[0-9-]+)(?:\.)?`)
 )
 
 // Normalize a string corresponding to an array of various values.
@@ -308,12 +308,12 @@ func popRotation(node *Node, originalRotate, rotate []float64) {
 // }
 
 // Flatten the text of a node and its children.
-func flatten(node *html.Node) string {
-	flattenedText := []string{extractText(node)}
-	for _, child := range nodeChildren(node, true) {
+func flatten(node *utils.HTMLNode) string {
+	flattenedText := []string{node.GetText()}
+	for _, child := range node.NodeChildren(true) {
 		flattenedText = append(flattenedText, flatten(child))
-		flattenedText = append(flattenedText, extractTail(child))
-		node.RemoveChild(child)
+		flattenedText = append(flattenedText, child.GetTail())
+		node.AsHtmlNode().RemoveChild(child.AsHtmlNode())
 	}
 	return strings.Join(flattenedText, "")
 }

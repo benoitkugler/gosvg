@@ -1,6 +1,7 @@
 package gosvg
 
 import (
+	"fmt"
 	"log"
 	"strings"
 
@@ -38,14 +39,14 @@ func (m matcher) Match(element *html.Node) (out []matchResult) {
 }
 
 // Find the stylesheets included in ``tree``.
-func findStylesheets(tree *html.Node) [][]parser.Token {
+func findStylesheets(tree *utils.HTMLNode) [][]parser.Token {
 	// TODO: support contentStyleType on <svg>
 	var out [][]parser.Token
-	iter := utils.NewHtmlIterator(tree)
+	iter := utils.NewHtmlIterator(tree.AsHtmlNode())
 	for iter.HasNext() {
 		element := iter.Next()
 		// http://www.w3.org/TR/SVG/styling.html#StyleElement
-		if text := extractText(element); element.Data == "{http://www.w3.org/2000/svg}style" &&
+		if text := element.GetText(); element.Data == "{http://www.w3.org/2000/svg}style" &&
 			(element.Get("type") == "" || element.Get("type") == "text/css") &&
 			text != "" {
 
@@ -59,7 +60,7 @@ func findStylesheets(tree *html.Node) [][]parser.Token {
 }
 
 // Find the rules in a stylesheet.
-func findStylesheetsRules(tree *Node, stylesheetRules []parser.Token, url string) []parser.QualifiedRule {
+func findStylesheetsRules(tree *html.Node, stylesheetRules []parser.Token, urlFetcher UrlFectcher, url string) []parser.QualifiedRule {
 	var out []parser.QualifiedRule
 	for _, rule := range stylesheetRules {
 		switch rule := rule.(type) {
@@ -76,30 +77,29 @@ func findStylesheetsRules(tree *Node, stylesheetRules []parser.Token, url string
 				default:
 					continue
 				}
-				cssUrl = parseUrl(v, url)
-				data, err := tree.fetchUrl(cssUrl, "text/css")
+				cssUrl := utils.UrlJoin(url, v, false, "@import")
+				data, err := urlFetcher(cssUrl, "text/css")
 				if err != nil {
 					log.Printf("unable to fetch style at %s", cssUrl)
 					continue
 				}
 				stylesheet := parser.ParseStylesheet2(data, false, false)
-				out = append(out, findStylesheetsRules(tree, stylesheet, cssUrl.String())...)
+				out = append(out, findStylesheetsRules(tree, stylesheet, urlFetcher, cssUrl)...)
 			}
 			// TODO: support media types
 			// if rule.lowerAtKeyword == "media" :
 		case parser.QualifiedRule:
 			out = append(out, rule)
 		case parser.ParseError:
-			log.Printf("error in css %s (%s) at %d:%d\n", err.Kind, err.Message, err.Line, err.Column)
+			log.Printf("error in css %s (%s) at %d:%d\n", rule.Kind, rule.Message, rule.Line, rule.Column)
 		}
 	}
-
+	return out
 }
 
-func parseDeclarations(input string) ([][2]string, [][2]string) {
+func _parseDecl(parsed []parser.Token) ([][2]string, [][2]string) {
 	var normalDeclarations, importantDeclarations [][2]string // name, value
-	for _, declaration := range parser.ParseDeclarationList2(input, false, false) {
-		// TODO: warn on error
+	for _, declaration := range parsed {
 		if err, ok := declaration.(parser.ParseError); ok {
 			log.Printf("error in css %s (%s) at %d:%d\n", err.Kind, err.Message, err.Line, err.Column)
 			continue
@@ -118,28 +118,49 @@ func parseDeclarations(input string) ([][2]string, [][2]string) {
 	return normalDeclarations, importantDeclarations
 }
 
+func parseDeclarations(input []parser.Token) ([][2]string, [][2]string) {
+	return _parseDecl(parser.ParseDeclarationList(input, false, false))
+}
+
+func parseDeclarations2(input string) ([][2]string, [][2]string) {
+	return _parseDecl(parser.ParseDeclarationList2(input, false, false))
+}
+
 // Find and parse the stylesheets in ``tree``.
 // Return two matcher objects,
 // for normal and !important declarations.
-func parseStylesheets(tree *Node, url string) styleMatchers {
-	normalMatcher = cssselect2.Matcher()
-	importantMatcher = cssselect2.Matcher()
+func parseStylesheets(tree *utils.HTMLNode, urlFetcher UrlFectcher, url string) styleMatchers {
+	var style styleMatchers
 	for _, stylesheet := range findStylesheets(tree) {
-		for _, rule := range findStylesheetsRules(tree, stylesheet, url) {
+		for _, rule := range findStylesheetsRules(tree.AsHtmlNode(), stylesheet, urlFetcher, url) {
 			normalDeclarations, importantDeclarations := parseDeclarations(*rule.Content)
-			for _, selector := range cssselect2.compileSelectorList(*rule.Prelude) {
-				if selector.pseudoElement == nil&!selector.neverMatches {
-					if normalDeclarations {
-						normalMatcher.addSelector(selector, normalDeclarations)
-					}
-					if importantDeclarations {
-						importantMatcher.addSelector(selector, importantDeclarations)
-					}
+			prelude := parser.Serialize(*rule.Prelude)
+			selector, err := cascadia.ParseGroupWithPseudoElements(prelude)
+			if err != nil {
+				log.Printf("unsupported css selector %s : %s\n", prelude, err)
+				continue
+			}
+			for _, sel := range selector {
+				if sel.PseudoElement() != "" {
+					err = fmt.Errorf("Unsupported pseudo-Element : %s", sel.PseudoElement())
+					break
 				}
 			}
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+
+			if len(normalDeclarations) != 0 {
+				style.normal = append(style.normal, match{selector: selector, declarations: normalDeclarations})
+			}
+			if len(importantDeclarations) != 0 {
+				style.important = append(style.important, match{selector: selector, declarations: importantDeclarations})
+			}
+
 		}
 	}
-	return normalMatcher, importantMatcher
+	return style
 }
 
 // // Get the declarations := range ``rule``.

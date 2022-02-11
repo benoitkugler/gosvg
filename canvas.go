@@ -1,7 +1,7 @@
 package gosvg
 
 import (
-	"fmt"
+	"image"
 	"log"
 	"math"
 
@@ -17,17 +17,38 @@ var _ backend.Canvas = (*Canvas)(nil)
 
 type Fl = backend.Fl
 
-// graphic state
-type state struct {
-	// stoke parameters
-	capL        rasterx.CapFunc
-	capT        rasterx.CapFunc
-	gp          rasterx.GapFunc
-	dashes      []float64
-	dashOffset  float64
+func floatToFixed(f Fl) fixed.Int26_6 {
+	return fixed.Int26_6(f * 64)
+}
+
+// argument for the rasterx.SetStroke function
+type strokeOptions struct {
+	lineCap rasterx.CapFunc
+	// lineGap     rasterx.GapFunc // not supported by webrender
 	miterLimit  fixed.Int26_6
 	strokeWidth fixed.Int26_6
-	jm          rasterx.JoinMode
+	lineJoin    rasterx.JoinMode
+}
+
+var (
+	joinToFunc = [...]rasterx.JoinMode{
+		backend.Round: rasterx.Round,
+		backend.Bevel: rasterx.Bevel,
+		backend.Miter: rasterx.Miter,
+	}
+
+	capToFunc = [...]rasterx.CapFunc{
+		backend.ButtCap:   rasterx.ButtCap,
+		backend.SquareCap: rasterx.SquareCap,
+		backend.RoundCap:  rasterx.RoundCap,
+	}
+)
+
+// graphic state
+type state struct {
+	strokeOptions strokeOptions
+	dashes        []fixed.Int26_6
+	dashOffset    fixed.Int26_6
 
 	mat         matrix.Transform
 	strokeColor parser.RGBA
@@ -35,18 +56,26 @@ type state struct {
 }
 
 type Canvas struct {
-	// buffer for the current path
-	// transformation have been resolved
-	path []segment
+	stroker *rasterx.Dasher
+	filler  *rasterx.Filler
+	image   *image.RGBA // shared output of `stroker` and `filler`
 
 	states []state // stack
 	state  state   // current state
 
+	hasPath bool // to avoid useless call to the rasterizer
+
 	rectangle [4]Fl // left, top, right, bottom
+
 }
 
-func NewCanvas(x, y, width, height Fl) *Canvas {
+func NewCanvas(x, y, width, height Fl, dest *image.RGBA) *Canvas {
+	r := dest.Bounds()
+	dx, dy := r.Dx(), r.Dy()
 	return &Canvas{
+		stroker: rasterx.NewDasher(dx, dy, rasterx.NewScannerGV(dx, dy, dest, r)),
+		filler:  rasterx.NewFiller(dx, dy, rasterx.NewScannerGV(dx, dy, dest, r)),
+		image:   dest,
 		state: state{
 			mat: matrix.Identity(),
 		},
@@ -62,23 +91,30 @@ func (cv *Canvas) transformPoint(x, y Fl) fixed.Point26_6 {
 
 func (cv *Canvas) MoveTo(x, y Fl) {
 	p := cv.transformPoint(x, y)
-	cv.path = append(cv.path, newMoveTo(p))
+	cv.stroker.Start(p)
+	cv.filler.Start(p)
+	cv.hasPath = true
 }
 
 func (cv *Canvas) LineTo(x, y Fl) {
 	p := cv.transformPoint(x, y)
-	cv.path = append(cv.path, newLineTo(p))
+	cv.stroker.Line(p)
+	cv.filler.Line(p)
+	cv.hasPath = true
 }
 
 func (cv *Canvas) CubicTo(x1, y1, x2, y2, x3, y3 Fl) {
 	p1 := cv.transformPoint(x1, y1)
 	p2 := cv.transformPoint(x2, y2)
 	p3 := cv.transformPoint(x3, y3)
-	cv.path = append(cv.path, newCubeTo(p1, p2, p3))
+	cv.stroker.CubeBezier(p1, p2, p3)
+	cv.filler.CubeBezier(p1, p2, p3)
+	cv.hasPath = true
 }
 
 func (cv *Canvas) ClosePath() {
-	cv.path = append(cv.path, segment{op: close})
+	cv.stroker.Stop(true)
+	cv.filler.Stop(true)
 }
 
 // Returns the current canvas rectangle
@@ -95,6 +131,10 @@ func (cv *Canvas) OnNewStack(f func()) {
 	L := len(cv.states)
 	cv.state = cv.states[L-1]
 	cv.states = cv.states[:L-1]
+	// apply the new state to rasterx,
+	// which is needed before path operation are trigerred
+	cv.applyDashes()
+	cv.applyStrokeOptions()
 }
 
 // NewGroup creates a new drawing target with the given
@@ -102,14 +142,17 @@ func (cv *Canvas) OnNewStack(f func()) {
 // before being passed to the `DrawWithOpacity`, `SetColorPattern`
 // and `DrawAsMask` methods.
 func (cv *Canvas) NewGroup(x backend.Fl, y backend.Fl, width backend.Fl, height backend.Fl) backend.Canvas {
-	return NewCanvas(x, y, width, height)
+	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
+	out := NewCanvas(x, y, width, height, img)
+	out.state = cv.state
+	return out
 }
 
 // DrawWithOpacity draw the given target to the main target, applying the given opacity (in [0,1]).
 func (cv *Canvas) DrawWithOpacity(opacity backend.Fl, group backend.Canvas) {
 	gr := group.(*Canvas)
-	fmt.Println(gr.path)
-	log.Println("DrawWithOpacity not implemented", opacity) // TODO:
+	applyOpacity(gr.image, opacity)
+	drawTo(cv.image, gr.image)
 }
 
 // DrawAsMask inteprets `mask` as an alpha mask
@@ -141,11 +184,11 @@ func (cv *Canvas) Clip(evenOdd bool) {
 // floating point numbers in the range 0 to 1.
 // If the values passed in are outside that range, they will be clamped.
 // `stroke` controls whether stroking or filling operations are concerned.
-func (cv *Canvas) SetColorRgba(color parser.RGBA, stroke bool) {
+func (cv *Canvas) SetColorRgba(c parser.RGBA, stroke bool) {
 	if stroke {
-		cv.state.strokeColor = color
+		cv.state.strokeColor = c
 	} else {
-		cv.state.fillColor = color
+		cv.state.fillColor = c
 	}
 }
 
@@ -166,6 +209,28 @@ func (cv *Canvas) SetBlendingMode(mode string) {
 	log.Println("blend mode not supported")
 }
 
+// apply the current stroke params to the rasterx stroker
+func (cv *Canvas) applyStrokeOptions() {
+	st := cv.state.strokeOptions
+	cv.stroker.Stroker.SetStroke(st.strokeWidth, st.miterLimit, st.lineCap, st.lineCap, rasterx.RoundGap, st.lineJoin)
+}
+
+// apply the current dash params to the rasterx stroker
+func (cv *Canvas) applyDashes() {
+	cv.stroker.Dashes = cv.state.dashes
+	cv.stroker.DashOffset = cv.state.dashOffset
+}
+
+// TODO: handle patterns
+func (cv *Canvas) applyFillColor() {
+	cv.filler.SetColor(cv.state.fillColor)
+}
+
+// TODO: handle patterns
+func (cv *Canvas) applyStrokeColor() {
+	cv.stroker.SetColor(cv.state.strokeColor)
+}
+
 // Sets the current line width to be used by `Stroke`.
 // The line width value specifies the diameter of a pen
 // that is circular in user space,
@@ -176,7 +241,8 @@ func (cv *Canvas) SetLineWidth(width backend.Fl) {
 	a, b, c, d := cv.state.mat.A, cv.state.mat.B, cv.state.mat.C, cv.state.mat.D
 	normA := math.Sqrt(float64(a*a + b*b + c*c + d*d))
 
-	cv.state.strokeWidth = floatToFixed(Fl(normA) * width)
+	cv.state.strokeOptions.strokeWidth = floatToFixed(Fl(normA) * width)
+	cv.applyStrokeOptions()
 }
 
 // Sets the dash pattern to be used by `Stroke`.
@@ -197,18 +263,22 @@ func (cv *Canvas) SetLineWidth(width backend.Fl) {
 // with alternating on and off portions of the size specified
 // by the single value.
 func (cv *Canvas) SetDash(dashes []backend.Fl, offset backend.Fl) {
-	cv.state.dashes = make([]float64, len(dashes))
+	cv.state.dashes = make([]fixed.Int26_6, len(dashes))
 	for i, d := range dashes {
-		cv.state.dashes[i] = float64(d)
+		cv.state.dashes[i] = floatToFixed(d)
 	}
-	cv.state.dashOffset = float64(offset)
+	cv.state.dashOffset = floatToFixed(offset)
+
+	cv.applyDashes()
 }
 
 // SetStrokeOptions sets additionnal options to be used when stroking
 // (in addition to SetLineWidth and SetDash)
 func (cv *Canvas) SetStrokeOptions(opts backend.StrokeOptions) {
-	// TODO: Implement
-	log.Println("not implemented", opts)
+	cv.state.strokeOptions.miterLimit = floatToFixed(opts.MiterLimit)
+	cv.state.strokeOptions.lineCap = capToFunc[opts.LineCap]
+	cv.state.strokeOptions.lineJoin = joinToFunc[opts.LineJoin]
+	cv.applyStrokeOptions()
 }
 
 // Paint actually shows the current path on the target,
@@ -217,10 +287,24 @@ func (cv *Canvas) SetStrokeOptions(opts backend.StrokeOptions) {
 // stroke settings.
 // After this call, the current path will be cleared.
 func (cv *Canvas) Paint(op backend.PaintOp) {
-	// TODO: Implement
-	fmt.Println(cv.path)
-	log.Println("not implemented")
-	cv.path = cv.path[:0]
+	doStroke := op&backend.Stroke != 0
+	doFill := op&(backend.FillEvenOdd|backend.FillNonZero) != 0
+
+	if doStroke && cv.hasPath {
+		cv.applyStrokeColor()
+		cv.stroker.Stroker.Draw()
+		cv.stroker.Clear()
+	}
+
+	if doFill && cv.hasPath {
+		cv.applyFillColor()
+		cv.filler.SetWinding(op&backend.FillNonZero != 0)
+		cv.filler.Draw()
+		cv.filler.Clear()
+	}
+
+	// reset the path
+	cv.hasPath = false
 }
 
 // GetTransform returns the current transformation matrix (CTM).

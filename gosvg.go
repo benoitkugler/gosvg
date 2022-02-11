@@ -1,22 +1,25 @@
 package gosvg
 
 import (
-	"fmt"
+	"image"
 	"io"
 
 	"github.com/benoitkugler/webrender/svg"
 )
 
-func Render(src io.Reader) error {
+func Render(src io.Reader) (image.Image, error) {
 	icon, err := svg.Parse(src, "", nil, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	output := NewCanvas(0, 0, 600, 600)
-	icon.Draw(output, 600, 600, nil)
+	var width, height Fl = 600., 600.
+	if vb := icon.ViewBox(); vb != nil {
+		width, height = vb.Width, vb.Height
+	}
+	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
+	output := NewCanvas(0, 0, width, height, img)
+	icon.Draw(output, width, height, nil)
 
-	fmt.Println(output.path)
-
-	return nil
+	return img, nil
 }

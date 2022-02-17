@@ -1,10 +1,6 @@
 package gosvg
 
 import (
-	"bytes"
-	"image"
-	"image/png"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,23 +80,29 @@ func TestStrokeIcons(t *testing.T) {
 // renderIcon(t, "testdata/TestPercentages.svg")
 // }
 
-func toPngBytes(m image.Image) ([]byte, error) {
-	var b bytes.Buffer
+func TestMask(t *testing.T) {
+	input := `
+	<svg viewBox="-10 -10 150 150">
+	<mask id="myMask">
+		<!-- Everything under a white pixel will be visible -->
+		<rect x="0" y="0" width="100" height="100" fill="white" />
 
-	// Write the image into the buffer
-	err := png.Encode(&b, m)
+		<!-- Everything under a black pixel will be invisible -->
+		<path d="M10,35 A20,20,0,0,1,50,35 A20,20,0,0,1,90,35 Q90,65,50,95 Q10,65,10,35 Z" fill="black" />
+	</mask>
+
+	<polygon points="-10,110 110,110 110,-10" fill="orange" />
+
+	<!-- with this mask applied, we "punch" a heart shape hole into the circle -->
+	<circle cx="50" cy="50" r="50" mask="url(#myMask)" />
+	</svg>
+	`
+	img, err := Render(strings.NewReader(input))
 	if err != nil {
-		return nil, err
+		t.Fatal(err)
 	}
-
-	return b.Bytes(), nil
-}
-
-func saveToPngFile(filePath string, m image.Image) error {
-	b, err := toPngBytes(m)
+	err = saveToPngFile(filepath.Join(os.TempDir(), "svg_mask.png"), img)
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
-	err = ioutil.WriteFile(filePath, b, os.ModePerm)
-	return err
 }

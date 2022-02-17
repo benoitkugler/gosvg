@@ -18,7 +18,7 @@ func Render(src io.Reader) (image.Image, error) {
 		width, height = vb.Width, vb.Height
 	}
 	img := image.NewRGBA(image.Rect(0, 0, int(width), int(height)))
-	output := NewCanvas(0, 0, width, height, img)
+	output := newCanvas(0, 0, width, height, img, nil)
 	icon.Draw(output, width, height, nil)
 
 	return img, nil

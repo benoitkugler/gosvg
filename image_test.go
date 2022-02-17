@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/benoitkugler/webrender/backend"
@@ -86,4 +87,59 @@ func TestDrawTo(t *testing.T) {
 	drawTo(s, s2)
 
 	saveToPngFile(filepath.Join(tmp, "copy_2.png"), s)
+}
+
+func Test_rgbaToAlpha(t *testing.T) {
+	tests := []struct {
+		r, g, b uint8
+		want    uint8
+	}{
+		{0, 0, 0, 0},
+		{0, 0, 0, 0},
+		{0, 0, 0, 0},
+		{255, 255, 255, 255},
+		{120, 120, 120, 120},
+		{60, 60, 60, 60},
+	}
+	for _, tt := range tests {
+		if got := rgbaToAlpha(tt.r, tt.g, tt.b); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("rgbaToAlpha() = %v, want %v", got, tt.want)
+		}
+	}
+}
+
+func TestAlphaMask(t *testing.T) {
+	tmp := os.TempDir()
+
+	s1 := sampleImage(200)
+	if err := saveToPngFile(filepath.Join(tmp, "alpha_1.png"), s1); err != nil {
+		t.Fatal(err)
+	}
+
+	alpha := rgbToAlpha(s1)
+	asGray := (*image.Gray)(alpha)
+	if err := saveToPngFile(filepath.Join(tmp, "alpha_2.png"), asGray); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyOpacityMask(t *testing.T) {
+	tmp := os.TempDir()
+
+	s1 := sampleImage(200)
+	if err := saveToPngFile(filepath.Join(tmp, "src.png"), s1); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := sampleImage(50)
+	mask := rgbToAlpha(s2)
+	asGray := (*image.Gray)(mask)
+	if err := saveToPngFile(filepath.Join(tmp, "alpha.png"), asGray); err != nil {
+		t.Fatal(err)
+	}
+
+	applyOpacityMask(s1, mask)
+	if err := saveToPngFile(filepath.Join(tmp, "src_with_alpha.png"), s1); err != nil {
+		t.Fatal(err)
+	}
 }
